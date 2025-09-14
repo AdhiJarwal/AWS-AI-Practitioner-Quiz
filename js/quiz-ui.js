@@ -2,9 +2,15 @@
 const startScreen = document.getElementById('start-screen');
 const quizContainer = document.getElementById('quiz-container');
 const resultsScreen = document.getElementById('results-screen');
-const startButton = document.getElementById('start-btn');
+const reviewScreen = document.getElementById('review-screen');
+const startButton = document.getElementById('start-new-btn');
+const resumeButton = document.getElementById('resume-btn');
+const quizHomeButton = document.getElementById('quiz-home-btn');
 const retakeButton = document.getElementById('retake-btn');
 const submitButton = document.getElementById('submit-btn');
+const reviewIncorrectButton = document.getElementById('review-incorrect-btn');
+const backToResultsButton = document.getElementById('back-to-results-btn');
+const homeButton = document.getElementById('home-btn');
 
 const questionContainer = document.getElementById('question-container');
 const questionText = document.getElementById('question-text');
@@ -14,7 +20,7 @@ const prevButton = document.getElementById('prev-btn');
 const nextButton = document.getElementById('next-btn');
 
 const currentQuestionElement = document.getElementById('current-question');
-const totalQuestionsElement = document.getElementById('total-questions');
+const totalQuestionsElement = document.getElementById('quiz-total-questions');
 const progressBar = document.getElementById('progress');
 const timerElement = document.getElementById('timer');
 
@@ -32,6 +38,8 @@ let shuffledQuizData = [];
 let selectedAnswers = [];
 let answeredQuestions = [];
 let score = 0;
+let incorrectAnswers = [];
+let quizSaved = false;
 
 // Timer variables
 let timerInterval;
@@ -47,12 +55,14 @@ function showStartScreen() {
     startScreen.style.display = 'block';
     quizContainer.style.display = 'none';
     resultsScreen.style.display = 'none';
+    reviewScreen.style.display = 'none';
 }
 
 function showQuizScreen() {
     startScreen.style.display = 'none';
     quizContainer.style.display = 'block';
     resultsScreen.style.display = 'none';
+    reviewScreen.style.display = 'none';
 
     // Start the timer
     startTimer();
@@ -62,81 +72,164 @@ function showResultsScreen() {
     startScreen.style.display = 'none';
     quizContainer.style.display = 'none';
     resultsScreen.style.display = 'block';
+    reviewScreen.style.display = 'none';
 
     // Stop the timer
     stopTimer();
 
-    // Calculate results
-    let incorrect = 0;
-
+    // Calculate results - count answered questions and use existing score
+    const answeredCount = answeredQuestions.filter(answered => answered).length;
+    const correct = score;
+    const incorrect = answeredCount - correct;
+    const unanswered = shuffledQuizData.length - answeredCount;
+    
+    // Recalculate incorrectAnswers based on current state
+    incorrectAnswers = [];
     for (let i = 0; i < answeredQuestions.length; i++) {
         if (answeredQuestions[i]) {
             const question = shuffledQuizData[i];
             const isMultiSelect = Array.isArray(question.rightAnswer);
+            let isIncorrect = false;
 
             if (isMultiSelect) {
-                const selectedOptions = selectedAnswers[i].map(index => question.options[index]);
-                const allCorrectSelected = question.rightAnswer.every(correctOpt =>
-                    selectedOptions.includes(correctOpt));
-                const noIncorrectSelected = selectedOptions.every(selectedOpt =>
-                    question.rightAnswer.includes(selectedOpt));
-
-                if (!(allCorrectSelected && noIncorrectSelected)) {
-                    incorrect++;
+                if (selectedAnswers[i] && Array.isArray(selectedAnswers[i])) {
+                    const selectedOptions = selectedAnswers[i].map(index => question.options[index]);
+                    const allCorrectSelected = question.rightAnswer.every(correctOpt =>
+                        selectedOptions.includes(correctOpt));
+                    const noIncorrectSelected = selectedOptions.every(selectedOpt =>
+                        question.rightAnswer.includes(selectedOpt));
+                    isIncorrect = !(allCorrectSelected && noIncorrectSelected);
+                } else {
+                    isIncorrect = true; // No selection means incorrect
                 }
             } else {
-                if (selectedAnswers[i] !== null &&
-                    question.options[selectedAnswers[i]] !== question.rightAnswer) {
-                    incorrect++;
-                }
+                isIncorrect = selectedAnswers[i] === null ||
+                    question.options[selectedAnswers[i]] !== question.rightAnswer;
+            }
+
+            if (isIncorrect) {
+                incorrectAnswers.push({
+                    questionIndex: i,
+                    question: question,
+                    selectedAnswer: isMultiSelect ? 
+                        (selectedAnswers[i] && Array.isArray(selectedAnswers[i]) ? 
+                            selectedAnswers[i].map(index => question.options[index]) : []) : 
+                        (selectedAnswers[i] !== null ? question.options[selectedAnswers[i]] : null),
+                    correctAnswer: question.rightAnswer
+                });
             }
         }
     }
 
-    const correct = score;
     const total = shuffledQuizData.length;
     const percentage = Math.round((correct / total) * 100);
 
     // Update results display
     finalScoreElement.textContent = `${correct}/${total}`;
     finalTimeElement.textContent = timerElement.textContent;
+    document.getElementById('attempted-count').textContent = `Attempted: ${answeredCount}`;
     correctCountElement.textContent = `Correct Answers: ${correct}`;
     incorrectCountElement.textContent = `Incorrect Answers: ${incorrect}`;
+    document.getElementById('unattempted-count').textContent = `Unattempted: ${unanswered}`;
     percentageElement.textContent = `Percentage: ${percentage}%`;
+    
+    // Draw pie chart
+    drawPieChart(correct, incorrect, unanswered);
+    
+    // Update legend
+    updateChartLegend(correct, incorrect, unanswered, total);
+    
+    // Save quiz statistics - only save once per quiz completion
+    if (quizSaved) {
+        console.log('Quiz already saved, skipping duplicate');
+        return;
+    }
+    
+    const stats = JSON.parse(localStorage.getItem('aws-quiz-stats') || '{}');
+    
+    stats.attempts = (stats.attempts || 0) + 1;
+    stats.bestScore = Math.max(stats.bestScore || 0, correct);
+    const now = new Date();
+    stats.lastAttempt = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+    quizSaved = true;
+    
+    // Add to history
+    if (!stats.history) stats.history = [];
+    const currentPercentage = Math.round((correct / total) * 100);
+    stats.history.push({
+        date: stats.lastAttempt,
+        score: correct,
+        total: total,
+        percentage: currentPercentage
+    });
+    
+    localStorage.setItem('aws-quiz-stats', JSON.stringify(stats));
+    console.log('Saved stats:', stats);
 }
 
 function initQuiz() {
-    // Reset variables
-    currentQuestionIndex = 0;
-    selectedAnswers = [];
-    answeredQuestions = [];
-    score = 0;
-
-    // Get quiz data
-    // We'll assume shuffledQuizData comes from quiz-data.js
-    if (typeof quizData !== 'undefined') {
-        // Clone the quiz data
-        shuffledQuizData = JSON.parse(JSON.stringify(quizData));
-
-        // Shuffle the quiz data
-        shuffleArray(shuffledQuizData);
+    // Check for saved progress
+    const savedProgress = localStorage.getItem('aws-quiz-progress');
+    if (savedProgress && confirm('Resume previous quiz session?')) {
+        const progress = JSON.parse(savedProgress);
+        currentQuestionIndex = progress.currentQuestionIndex || 0;
+        selectedAnswers = progress.selectedAnswers || [];
+        answeredQuestions = progress.answeredQuestions || [];
+        score = progress.score || 0;
+        seconds = progress.seconds || 0;
+        minutes = progress.minutes || 0;
+        hours = progress.hours || 0;
+        incorrectAnswers = [];
+        
+        // Use saved shuffled data to maintain question order
+        shuffledQuizData = progress.shuffledQuizData || [];
+        
+        console.log('Resumed - Score:', score, 'Answered:', answeredQuestions.filter(a => a).length);
     } else {
-        console.error('Quiz data not found! Make sure quiz-data.js is loaded.');
-        return;
+        // Reset variables
+        currentQuestionIndex = 0;
+        selectedAnswers = [];
+        answeredQuestions = [];
+        score = 0;
+        incorrectAnswers = [];
+        quizSaved = false;
+        localStorage.removeItem('aws-quiz-progress');
+        
+        // Get quiz data and shuffle only for new quiz
+        if (typeof quizData !== 'undefined') {
+            // Clone the quiz data
+            shuffledQuizData = JSON.parse(JSON.stringify(quizData));
+            // Shuffle the quiz data
+            shuffleArray(shuffledQuizData);
+        } else {
+            console.error('Quiz data not found! Make sure quiz-data.js is loaded.');
+            return;
+        }
     }
 
-    // Initialize arrays
-    for (let i = 0; i < shuffledQuizData.length; i++) {
-        const isMultiSelect = Array.isArray(shuffledQuizData[i].rightAnswer);
-        selectedAnswers.push(isMultiSelect ? [] : null);
-        answeredQuestions.push(false);
+    // Initialize arrays only if not resuming
+    if (selectedAnswers.length === 0) {
+        for (let i = 0; i < shuffledQuizData.length; i++) {
+            const isMultiSelect = Array.isArray(shuffledQuizData[i].rightAnswer);
+            selectedAnswers.push(isMultiSelect ? [] : null);
+            answeredQuestions.push(false);
+        }
+    } else {
+        // Ensure arrays are the right length when resuming
+        while (selectedAnswers.length < shuffledQuizData.length) {
+            const isMultiSelect = Array.isArray(shuffledQuizData[selectedAnswers.length].rightAnswer);
+            selectedAnswers.push(isMultiSelect ? [] : null);
+            answeredQuestions.push(false);
+        }
     }
 
     // Set total questions display
-    totalQuestionsElement.textContent = shuffledQuizData.length;
+    if (totalQuestionsElement) {
+        totalQuestionsElement.textContent = shuffledQuizData.length;
+    }
 
-    // Display first question
-    displayQuestion(0);
+    // Display current question (0 for new quiz, saved index for resumed quiz)
+    displayQuestion(currentQuestionIndex);
 
     // Reset and show quiz container
     pauseButton.textContent = "⏸️";
@@ -147,13 +240,23 @@ function displayQuestion(index) {
     const question = shuffledQuizData[index];
 
     // Update current question number
-    currentQuestionElement.textContent = index + 1;
+    if (currentQuestionElement) {
+        currentQuestionElement.textContent = index + 1;
+    }
 
     // Update progress bar
-    progressBar.style.width = `${((index + 1) / shuffledQuizData.length) * 100}%`;
+    if (progressBar) {
+        progressBar.style.width = `${((index + 1) / shuffledQuizData.length) * 100}%`;
+    }
 
-    // Display question text
+    // Display question text with status indicator
     questionText.textContent = question.question;
+    
+    // Add status indicator
+    const statusIndicator = document.createElement('span');
+    statusIndicator.className = `question-status ${answeredQuestions[index] ? 'answered' : 'unanswered'}`;
+    statusIndicator.title = answeredQuestions[index] ? 'Question answered' : 'Question not answered';
+    questionText.appendChild(statusIndicator);
 
     // Clear previous options
     optionsContainer.innerHTML = '';
@@ -161,11 +264,17 @@ function displayQuestion(index) {
     // Determine if this is a multi-select question
     const isMultiSelect = Array.isArray(question.rightAnswer);
 
+    // Clear any existing multi-select indicator
+    const existingIndicator = questionContainer.querySelector('.multi-select-indicator');
+    if (existingIndicator) {
+        existingIndicator.remove();
+    }
+
     // Add multi-select indicator if needed
-    if (isMultiSelect && !answeredQuestions[index]) {
+    if (isMultiSelect) {
         const indicator = document.createElement('div');
         indicator.className = 'multi-select-indicator';
-        questionText.appendChild(indicator);
+        questionContainer.appendChild(indicator);
     }
 
     // Display options
@@ -198,22 +307,8 @@ function displayQuestion(index) {
             optionElement.classList.add('selected');
         }
 
-        // If question was answered, show correct/incorrect indicators
-        if (answeredQuestions[index]) {
-            if (isMultiSelect) {
-                if (question.rightAnswer.includes(option)) {
-                    optionElement.classList.add('correct');
-                } else if (selectedAnswers[index].map(i => question.options[i]).includes(option)) {
-                    optionElement.classList.add('incorrect');
-                }
-            } else {
-                if (option === question.rightAnswer) {
-                    optionElement.classList.add('correct');
-                } else if (selectedAnswers[index] === optionIndex) {
-                    optionElement.classList.add('incorrect');
-                }
-            }
-        }
+        // Only show indicators if question was actually submitted (not just selected)
+        // For resumed quizzes, we need to check if the question was truly answered and submitted
 
         // Add event listener to option
         optionElement.addEventListener('click', () => {
@@ -242,8 +337,8 @@ function displayQuestion(index) {
                     if (checkbox) checkbox.innerHTML = '☑';
                 }
             } else {
-                // Single select behavior
-                document.querySelectorAll('.option').forEach(opt => {
+                // Single select behavior - scope to current question only
+                optionsContainer.querySelectorAll('.option').forEach(opt => {
                     opt.classList.remove('selected');
                 });
                 optionElement.classList.add('selected');
@@ -262,9 +357,29 @@ function displayQuestion(index) {
         optionsContainer.appendChild(optionElement);
     });
 
-    // Show feedback if question was answered
+    // Show feedback if question was answered and submitted
     if (answeredQuestions[index]) {
         showFeedback(index);
+        
+        // Show correct/incorrect indicators only for submitted questions
+        setTimeout(() => {
+            const options = optionsContainer.querySelectorAll('.option');
+            options.forEach((opt, optIndex) => {
+                if (isMultiSelect) {
+                    if (question.rightAnswer.includes(question.options[optIndex])) {
+                        opt.classList.add('correct');
+                    } else if (selectedAnswers[index] && selectedAnswers[index].includes(optIndex)) {
+                        opt.classList.add('incorrect');
+                    }
+                } else {
+                    if (question.options[optIndex] === question.rightAnswer) {
+                        opt.classList.add('correct');
+                    } else if (selectedAnswers[index] === optIndex) {
+                        opt.classList.add('incorrect');
+                    }
+                }
+            });
+        }, 0);
     } else {
         hideFeedback();
 
@@ -304,7 +419,7 @@ function displayQuestion(index) {
     if (index === shuffledQuizData.length - 1) {
         nextButton.style.display = 'none';
         submitButton.style.display = 'block';
-        submitButton.disabled = !allQuestionsAnswered();
+        submitButton.disabled = false; // Always enable submit button on last question
     } else {
         nextButton.style.display = 'block';
         submitButton.style.display = 'none';
@@ -327,8 +442,11 @@ function checkAnswer(questionIndex, selectedOptionIndex) {
         score++;
     }
 
+    // Save progress
+    saveProgress();
+
     // Highlight correct and incorrect options
-    const options = document.querySelectorAll('.option');
+    const options = optionsContainer.querySelectorAll('.option');
     options.forEach((option, index) => {
         if (index === selectedOptionIndex) {
             if (correct) {
@@ -352,11 +470,6 @@ function checkAnswer(questionIndex, selectedOptionIndex) {
 
     // Update button states
     updateButtonStates();
-
-    // Enable submit button on last question if all questions are answered
-    if (questionIndex === shuffledQuizData.length - 1) {
-        submitButton.disabled = !allQuestionsAnswered();
-    }
 }
 
 function checkMultiAnswer(questionIndex, selectedOptionIndices) {
@@ -379,8 +492,11 @@ function checkMultiAnswer(questionIndex, selectedOptionIndices) {
         score++;
     }
 
+    // Save progress
+    saveProgress();
+
     // Highlight correct and incorrect options
-    const options = document.querySelectorAll('.option');
+    const options = optionsContainer.querySelectorAll('.option');
     options.forEach((option, index) => {
         const optionText = question.options[index];
         if (question.rightAnswer.includes(optionText)) {
@@ -401,11 +517,6 @@ function checkMultiAnswer(questionIndex, selectedOptionIndices) {
 
     // Update button states
     updateButtonStates();
-
-    // Enable submit button on last question if all questions are answered
-    if (questionIndex === shuffledQuizData.length - 1) {
-        submitButton.disabled = !allQuestionsAnswered();
-    }
 }
 
 function showFeedback(questionIndex) {
@@ -429,14 +540,10 @@ function showFeedback(questionIndex) {
     }
 
     if (correct) {
-        feedbackContainer.textContent = "Correct! Well done.";
+        feedbackContainer.textContent = "Correct! You nailed it!";
         feedbackContainer.className = "feedback correct";
     } else {
-        if (isMultiSelect) {
-            feedbackContainer.textContent = `Incorrect. The correct answers are: ${question.rightAnswer.join(" and ")}`;
-        } else {
-            feedbackContainer.textContent = `Incorrect. The correct answer is: ${question.rightAnswer}`;
-        }
+        feedbackContainer.textContent = "Incorrect, better luck next time.";
         feedbackContainer.className = "feedback incorrect";
     }
 
@@ -457,12 +564,12 @@ function updateButtonStates() {
         return;
     }
 
-    nextButton.disabled = !answeredQuestions[currentQuestionIndex] &&
-        currentQuestionIndex < shuffledQuizData.length - 1;
+    // Allow free navigation - users can skip questions
+    nextButton.disabled = currentQuestionIndex >= shuffledQuizData.length - 1;
 
-    // Enable submit button on last question if all questions are answered
+    // Keep submit button enabled on last question
     if (currentQuestionIndex === shuffledQuizData.length - 1) {
-        submitButton.disabled = !allQuestionsAnswered();
+        submitButton.disabled = false;
     }
 }
 
@@ -471,7 +578,16 @@ function allQuestionsAnswered() {
     return answeredQuestions.every(answered => answered === true);
 }
 
+function getUnansweredCount() {
+    return answeredQuestions.filter(answered => !answered).length;
+}
+
 function startTimer() {
+    // Clear any existing timer first
+    if (timerInterval) {
+        clearInterval(timerInterval);
+    }
+    
     // Reset timer variables
     seconds = 0;
     minutes = 0;
@@ -519,7 +635,8 @@ function togglePause() {
         pauseButton.textContent = "▶️";
 
         // Disable all interactive elements
-        document.querySelectorAll('.option').forEach(opt => {
+        const currentOptions = optionsContainer.querySelectorAll('.option');
+        currentOptions.forEach(opt => {
             opt.style.pointerEvents = 'none';
         });
 
@@ -553,7 +670,8 @@ function togglePause() {
         pauseButton.textContent = "⏸️";
 
         // Re-enable interactive elements
-        document.querySelectorAll('.option').forEach(opt => {
+        const currentOptions = optionsContainer.querySelectorAll('.option');
+        currentOptions.forEach(opt => {
             opt.style.pointerEvents = 'auto';
         });
 
@@ -576,11 +694,40 @@ function shuffleArray(array) {
 
 // Setup event listeners
 function setupEventListeners() {
-    // Start button
+    // Add null checks for safety
+    if (!startButton || !retakeButton || !submitButton || !prevButton || !nextButton || !pauseButton) {
+        console.error('Required DOM elements not found');
+        return;
+    }
+
+    // Start new quiz button
     startButton.addEventListener('click', () => {
+        const savedProgress = localStorage.getItem('aws-quiz-progress');
+        if (savedProgress && confirm('There is an existing quiz in progress. Starting a new quiz will lose all current progress. Continue?')) {
+            localStorage.removeItem('aws-quiz-progress');
+        } else if (savedProgress) {
+            return; // User cancelled
+        }
         showQuizScreen();
         initQuiz();
     });
+
+    // Resume quiz button
+    if (resumeButton) {
+        resumeButton.addEventListener('click', () => {
+            showQuizScreen();
+            initQuiz();
+        });
+    }
+
+    // Quiz home button
+    if (quizHomeButton) {
+        quizHomeButton.addEventListener('click', () => {
+            saveProgress();
+            loadUserStats();
+            showStartScreen();
+        });
+    }
 
     // Retake button
     retakeButton.addEventListener('click', () => {
@@ -588,32 +735,397 @@ function setupEventListeners() {
         initQuiz();
     });
 
+    // Review incorrect answers button
+    if (reviewIncorrectButton) {
+        reviewIncorrectButton.addEventListener('click', () => {
+            showReviewScreen();
+        });
+    }
+
+    // Back to results button
+    if (backToResultsButton) {
+        backToResultsButton.addEventListener('click', () => {
+            showResultsScreen();
+        });
+    }
+
+    // Home button
+    if (homeButton) {
+        homeButton.addEventListener('click', () => {
+            // Reset timer
+            stopTimer();
+            seconds = 0;
+            minutes = 0;
+            hours = 0;
+            updateTimerDisplay();
+            
+            // Clear any saved progress
+            clearProgress();
+            
+            // Reload stats and show start screen
+            loadUserStats();
+            showStartScreen();
+        });
+    }
+
     // Submit button
     submitButton.addEventListener('click', () => {
-        showResultsScreen();
+        const unansweredCount = getUnansweredCount();
+        if (unansweredCount === 0) {
+            clearProgress();
+            showResultsScreen();
+        } else {
+            if (confirm(`You have ${unansweredCount} unanswered question(s). Submit anyway? Unanswered questions will be marked as incorrect.`)) {
+                clearProgress();
+                showResultsScreen();
+            }
+        }
     });
 
-    // Navigation buttons
+    // Navigation buttons - simplified without redundant checks
     prevButton.addEventListener('click', () => {
-        if (currentQuestionIndex > 0) {
-            currentQuestionIndex--;
-            displayQuestion(currentQuestionIndex);
-        }
+        currentQuestionIndex--;
+        displayQuestion(currentQuestionIndex);
     });
 
     nextButton.addEventListener('click', () => {
-        if (currentQuestionIndex < shuffledQuizData.length - 1) {
-            currentQuestionIndex++;
-            displayQuestion(currentQuestionIndex);
-        }
+        currentQuestionIndex++;
+        displayQuestion(currentQuestionIndex);
     });
 
     // Pause button
     pauseButton.addEventListener('click', togglePause);
+
+    // Reset button
+    const resetButton = document.getElementById('reset-btn');
+    if (resetButton) {
+        resetButton.addEventListener('click', () => {
+            if (confirm('Are you sure you want to reset the quiz? All progress will be lost.')) {
+                clearProgress();
+                showStartScreen();
+            }
+        });
+    }
+}
+
+// Load user statistics from localStorage
+function loadUserStats() {
+    const stats = JSON.parse(localStorage.getItem('aws-quiz-stats') || '{}');
+    const savedProgress = localStorage.getItem('aws-quiz-progress');
+    console.log('Loading stats:', stats); // Debug log
+    
+    // Show/hide resume button based on saved progress
+    if (resumeButton) {
+        if (savedProgress) {
+            resumeButton.style.display = 'inline-block';
+        } else {
+            resumeButton.style.display = 'none';
+        }
+    }
+    
+    const totalQuestions = shuffledQuizData.length || quizData.length || 3;
+    
+    // Calculate success rate as average of all attempts
+    let successRate = 0;
+    if (stats.history && stats.history.length > 0) {
+        const totalPercentage = stats.history.reduce((sum, attempt) => sum + attempt.percentage, 0);
+        successRate = Math.round(totalPercentage / stats.history.length);
+    }
+    const successRateElement = document.getElementById('success-rate');
+    if (successRateElement) {
+        successRateElement.textContent = `${successRate}%`;
+        console.log('Set success rate to:', successRate + '%'); // Debug log
+    }
+    
+    if (stats.attempts > 0) {
+        const progressTracking = document.getElementById('progress-tracking');
+        if (progressTracking) {
+            progressTracking.style.display = 'block';
+            
+            const bestScoreElement = document.getElementById('best-score');
+            const attemptCountElement = document.getElementById('attempt-count');
+            const lastAttemptElement = document.getElementById('last-attempt');
+            const improvementElement = document.getElementById('improvement-suggestion');
+            
+            if (bestScoreElement) bestScoreElement.textContent = `${stats.bestScore || 0}/${totalQuestions}`;
+            if (attemptCountElement) attemptCountElement.textContent = stats.attempts;
+            if (lastAttemptElement) lastAttemptElement.textContent = stats.lastAttempt || 'Never';
+            
+            // Improvement suggestion
+            if (improvementElement) {
+                let suggestion = '';
+                if (successRate < 50) suggestion = 'Focus on AWS ML fundamentals and SageMaker basics';
+                else if (successRate < 70) suggestion = 'Review advanced ML concepts and AWS best practices';
+                else if (successRate < 85) suggestion = 'Practice edge cases and optimization scenarios';
+                else suggestion = 'Excellent! Keep practicing to maintain your skills';
+                
+                improvementElement.textContent = suggestion;
+            }
+        }
+    }
+    
+    // Show quiz history
+    const historySection = document.getElementById('quiz-history');
+    const historyContainer = document.getElementById('history-container');
+    if (stats.history && stats.history.length > 0 && historySection && historyContainer) {
+        historySection.style.display = 'block';
+        historyContainer.innerHTML = '';
+        
+        stats.history.slice(-5).reverse().forEach((attempt, index) => {
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            historyItem.innerHTML = `
+                <div class="history-date">${attempt.date}</div>
+                <div class="history-score">${attempt.score}/${attempt.total} (${attempt.percentage}%)</div>
+            `;
+            historyContainer.appendChild(historyItem);
+        });
+    }
 }
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
+    initSettings();
+    loadUserStats();
     showStartScreen();
 });
+// Save progress function
+function saveProgress() {
+    const progress = {
+        currentQuestionIndex,
+        selectedAnswers,
+        answeredQuestions,
+        score,
+        seconds,
+        minutes,
+        hours,
+        shuffledQuizData
+    };
+    localStorage.setItem('aws-quiz-progress', JSON.stringify(progress));
+}
+
+// Clear progress function
+function clearProgress() {
+    localStorage.removeItem('aws-quiz-progress');
+}
+
+// Pie chart function
+function drawPieChart(correct, incorrect, unanswered) {
+    const canvas = document.getElementById('pie-chart');
+    const ctx = canvas.getContext('2d');
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = 80;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    const total = correct + incorrect + unanswered;
+    if (total === 0) return;
+    
+    // Calculate angles and percentages
+    const correctAngle = (correct / total) * 2 * Math.PI;
+    const incorrectAngle = (incorrect / total) * 2 * Math.PI;
+    const unansweredAngle = (unanswered / total) * 2 * Math.PI;
+    
+    let currentAngle = -Math.PI / 2; // Start from top
+    
+    // Draw correct slice (green)
+    if (correct > 0) {
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, currentAngle, currentAngle + correctAngle);
+        ctx.closePath();
+        ctx.fillStyle = '#28a745';
+        ctx.fill();
+        
+        // Add percentage text
+        const midAngle = currentAngle + correctAngle / 2;
+        const textX = centerX + Math.cos(midAngle) * (radius * 0.7);
+        const textY = centerY + Math.sin(midAngle) * (radius * 0.7);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        const correctPercent = Math.round((correct / total) * 100);
+        if (correctPercent > 5) ctx.fillText(`${correctPercent}%`, textX, textY);
+        
+        currentAngle += correctAngle;
+    }
+    
+    // Draw incorrect slice (red)
+    if (incorrect > 0) {
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, currentAngle, currentAngle + incorrectAngle);
+        ctx.closePath();
+        ctx.fillStyle = '#dc3545';
+        ctx.fill();
+        
+        // Add percentage text
+        const midAngle = currentAngle + incorrectAngle / 2;
+        const textX = centerX + Math.cos(midAngle) * (radius * 0.7);
+        const textY = centerY + Math.sin(midAngle) * (radius * 0.7);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        const incorrectPercent = Math.round((incorrect / total) * 100);
+        if (incorrectPercent > 5) ctx.fillText(`${incorrectPercent}%`, textX, textY);
+        
+        currentAngle += incorrectAngle;
+    }
+    
+    // Draw unanswered slice (gray)
+    if (unanswered > 0) {
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.arc(centerX, centerY, radius, currentAngle, currentAngle + unansweredAngle);
+        ctx.closePath();
+        ctx.fillStyle = '#6c757d';
+        ctx.fill();
+        
+        // Add percentage text
+        const midAngle = currentAngle + unansweredAngle / 2;
+        const textX = centerX + Math.cos(midAngle) * (radius * 0.7);
+        const textY = centerY + Math.sin(midAngle) * (radius * 0.7);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        const unansweredPercent = Math.round((unanswered / total) * 100);
+        if (unansweredPercent > 5) ctx.fillText(`${unansweredPercent}%`, textX, textY);
+    }
+    
+    // Add border
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+// Update chart legend
+function updateChartLegend(correct, incorrect, unanswered, total) {
+    const correctPercent = Math.round((correct / total) * 100);
+    const incorrectPercent = Math.round((incorrect / total) * 100);
+    const unansweredPercent = Math.round((unanswered / total) * 100);
+    
+    document.getElementById('correct-legend').textContent = `Correct: ${correctPercent}% (${correct})`;
+    document.getElementById('incorrect-legend').textContent = `Incorrect: ${incorrectPercent}% (${incorrect})`;
+    document.getElementById('unanswered-legend').textContent = `Unanswered: ${unansweredPercent}% (${unanswered})`;
+}
+
+function showReviewScreen() {
+    startScreen.style.display = 'none';
+    quizContainer.style.display = 'none';
+    resultsScreen.style.display = 'none';
+    reviewScreen.style.display = 'block';
+
+    displayIncorrectQuestions();
+}
+
+function displayIncorrectQuestions() {
+    const container = document.getElementById('incorrect-questions-container');
+    container.innerHTML = '';
+
+    if (incorrectAnswers.length === 0) {
+        container.innerHTML = '<p class="no-incorrect">🎉 Great job! You got all questions correct!</p>';
+        return;
+    }
+
+    incorrectAnswers.forEach((item, index) => {
+        const questionDiv = document.createElement('div');
+        questionDiv.className = 'incorrect-question-item';
+        
+        const isMultiSelect = Array.isArray(item.correctAnswer);
+        
+        questionDiv.innerHTML = `
+            <div class="question-number">Question ${item.questionIndex + 1}</div>
+            <div class="question-text-review">${item.question.question}</div>
+            
+            <div class="answer-section">
+                <div class="your-answer">
+                    <strong>Your Answer:</strong>
+                    <span class="incorrect-answer">${
+                        isMultiSelect ? 
+                            (Array.isArray(item.selectedAnswer) ? item.selectedAnswer.join(', ') : 'No answer selected') :
+                            (item.selectedAnswer || 'No answer selected')
+                    }</span>
+                </div>
+                
+                <div class="correct-answer">
+                    <strong>Correct Answer:</strong>
+                    <span class="right-answer">${
+                        isMultiSelect ? 
+                            item.correctAnswer.join(', ') :
+                            item.correctAnswer
+                    }</span>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(questionDiv);
+    });
+}
+// Settings functionality
+function initSettings() {
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsContent = document.getElementById('settings-content');
+    const themeSelect = document.getElementById('theme-select');
+    const fontSizeSelect = document.getElementById('font-size-select');
+
+    if (!settingsBtn || !settingsContent || !themeSelect || !fontSizeSelect) return;
+
+    // Toggle settings panel
+    settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isVisible = settingsContent.style.display !== 'none';
+        settingsContent.style.display = isVisible ? 'none' : 'block';
+    });
+
+    // Close settings when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!settingsBtn.contains(e.target) && !settingsContent.contains(e.target)) {
+            settingsContent.style.display = 'none';
+        }
+    });
+
+    // Prevent closing when clicking inside settings content
+    settingsContent.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
+
+    // Theme change
+    themeSelect.addEventListener('change', (e) => {
+        const theme = e.target.value;
+        document.body.setAttribute('data-theme', theme);
+    });
+
+    // Font size change
+    fontSizeSelect.addEventListener('change', (e) => {
+        const fontSize = e.target.value;
+        if (fontSize === 'small') {
+            document.body.style.fontSize = '14px';
+            document.body.style.setProperty('--base-font-size', '14px');
+        } else if (fontSize === 'large') {
+            document.body.style.fontSize = '18px';
+            document.body.style.setProperty('--base-font-size', '18px');
+        } else {
+            document.body.style.fontSize = '16px';
+            document.body.style.setProperty('--base-font-size', '16px');
+        }
+    });
+
+    // Reset progress button
+    const resetProgressBtn = document.getElementById('reset-progress-btn');
+    if (resetProgressBtn) {
+        resetProgressBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to reset ALL progress? This will clear your success rate, attempts, and best score. This action cannot be undone.')) {
+                localStorage.removeItem('aws-quiz-stats');
+                localStorage.removeItem('aws-quiz-progress');
+                alert('All progress has been reset!');
+                location.reload();
+            }
+        });
+    }
+}
+
